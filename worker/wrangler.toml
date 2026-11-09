@@ -3,8 +3,8 @@ main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
 [vars]
-# 프론트(Pages) 도메인. 콤마로 여러 개
-ALLOWED_ORIGINS = "http://localhost:5173"
+# 프론트(Pages) 도메인. 콤마로 여러 개, 포트 자리에 *는 모든 포트 (배포 시 Pages 도메인으로 교체)
+ALLOWED_ORIGINS = "http://localhost:*,http://127.0.0.1:*"
 
 # 비밀값은 `wrangler secret put CRAWLER_TOKEN` / `ADMIN_PASSWORD` (로컬은 .dev.vars)
 

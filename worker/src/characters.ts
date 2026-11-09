@@ -105,6 +105,8 @@ app.delete('/:id{[0-9]+}', requireActor, async (c) => {
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE characters SET deleted_at = datetime('now') WHERE id = ?1`).bind(id),
     c.env.DB.prepare('DELETE FROM character_tags WHERE character_id = ?1').bind(id),
+    // 공대표에서도 빠짐 (복구해도 자리는 돌아오지 않음)
+    c.env.DB.prepare('DELETE FROM raid_slots WHERE character_id = ?1').bind(id),
     auditStmt(c, 'character.delete', 'character', id, {
       server: ch.server, name: ch.name, adventure: ch.adventure, tags: tags.map((t) => t.key),
     }),

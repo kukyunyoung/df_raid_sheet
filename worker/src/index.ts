@@ -1,15 +1,24 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import actors from './actors'
 import characters from './characters'
 import crawler from './crawler'
+import raids from './raids'
 import { type AppEnv, SERVERS, isAdmin } from './lib'
 
 const app = new Hono<AppEnv>()
 
+/** 'http://localhost:*' 처럼 포트 자리에 *를 쓰면 모든 포트 허용 */
+function originAllowed(origin: string, allowed: string[]): boolean {
+  return allowed.some((a) =>
+    a.endsWith(':*') ? origin.startsWith(a.slice(0, -1)) && /^\d+$/.test(origin.slice(a.length - 1)) : a === origin,
+  )
+}
+
 app.use('/api/*', (c, next) => {
   const origins = c.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim())
   return cors({
-    origin: (origin) => (origins.includes(origin) ? origin : null),
+    origin: (origin) => (originAllowed(origin, origins) ? origin : null),
     allowHeaders: ['Content-Type', 'X-Device-Id', 'X-Actor-Name', 'X-Admin-Password'],
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   })(c, next)
@@ -64,7 +73,9 @@ app.get('/api/logs', async (c) => {
   })))
 })
 
+app.route('/api/actors', actors)
 app.route('/api/characters', characters)
 app.route('/api/crawler', crawler)
+app.route('/api/raids', raids)
 
 export default app

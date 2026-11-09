@@ -54,21 +54,26 @@ export const requireActor = createMiddleware<AppEnv>(async (c, next) => {
   }
 
   const ip = clientIp(c)
+  const admin = isAdmin(c)
+  // 이름은 처음 등록한 값으로 고정 (이후 헤더로 다른 이름을 보내도 무시)
+  // 관리자 비밀번호로 요청한 기기는 자동 승인
   const row = await c.env.DB.prepare(
-    `INSERT INTO actors (device_id, name, last_ip, last_seen) VALUES (?1, ?2, ?3, datetime('now'))
+    `INSERT INTO actors (device_id, name, last_ip, last_seen, approved) VALUES (?1, ?2, ?3, datetime('now'), ?4)
      ON CONFLICT(device_id) DO UPDATE SET
-       name = excluded.name, last_ip = excluded.last_ip, last_seen = excluded.last_seen
-     RETURNING blocked`,
-  ).bind(deviceId, name, ip).first<{ blocked: number }>()
+       last_ip = excluded.last_ip, last_seen = excluded.last_seen,
+       approved = MAX(approved, excluded.approved)
+     RETURNING blocked, name, approved`,
+  ).bind(deviceId, name, ip, admin ? 1 : 0).first<{ blocked: number; name: string; approved: number }>()
   if (row?.blocked) return fail(c, 403, '차단된 사용자입니다')
+  if (!row?.approved) return fail(c, 403, '관리자 승인 대기 중입니다')
 
-  c.set('actor', { deviceId, name, ip, isAdmin: isAdmin(c) })
+  c.set('actor', { deviceId, name: row.name, ip, isAdmin: admin })
   await next()
 })
 
 /** audit_log insert 문 (batch에 넣어서 쓰기와 함께 실행) */
 export function auditStmt(
-  c: Ctx, action: string, targetType: string, targetId: number, detail?: unknown,
+  c: Ctx, action: string, targetType: string, targetId: number | null, detail?: unknown,
 ): D1PreparedStatement {
   const a = c.get('actor')
   return c.env.DB.prepare(

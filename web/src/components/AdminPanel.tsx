@@ -1,0 +1,76 @@
+import type { ReactNode } from 'react'
+import { type ActorInfo, api } from '../lib/api'
+import { fmtDateTime } from '../lib/format'
+import { Button, Modal } from './ui'
+
+/** 관리자: 작업자 승인/차단 */
+export function AdminPanel({
+  actors, onClose, run,
+}: {
+  actors: ActorInfo[]
+  onClose: () => void
+  run: (fn: () => Promise<unknown>) => Promise<boolean>
+}) {
+  const pending = actors.filter((a) => !a.approved && !a.blocked)
+  const others = actors.filter((a) => a.approved || a.blocked)
+
+  const row = (a: ActorInfo, actions: ReactNode) => (
+    <li key={a.device_id} className="flex items-center justify-between gap-3 py-3">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-semibold">
+          {a.name}
+          {a.blocked ? <span className="ml-2 text-xs font-medium text-rose-600 dark:text-rose-400">차단됨</span> : null}
+          {a.same_name > 0 && (
+            <span className="ml-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+              같은 이름 {a.same_name}명 더 있음
+            </span>
+          )}
+        </p>
+        <p className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+          {a.last_ip || 'IP 없음'} · {fmtDateTime(a.first_seen)} 등록
+        </p>
+      </div>
+      <div className="flex shrink-0 gap-1.5">{actions}</div>
+    </li>
+  )
+
+  return (
+    <Modal open onClose={onClose} title="작업자 관리">
+      <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400">승인 대기 {pending.length}</h3>
+      {pending.length === 0 ? (
+        <p className="py-4 text-sm text-gray-500 dark:text-gray-400">대기 중인 요청이 없습니다.</p>
+      ) : (
+        <ul className="divide-y divide-gray-100 dark:divide-white/5">
+          {pending.map((a) =>
+            row(a, (
+              <>
+                <Button variant="primary" className="px-3 py-1.5"
+                  onClick={() => run(() => api.approveActor(a.device_id))}>승인</Button>
+                <Button variant="danger" className="px-3 py-1.5"
+                  onClick={() => run(() => api.blockActor(a.device_id, true))}>거절</Button>
+              </>
+            )),
+          )}
+        </ul>
+      )}
+
+      <h3 className="mt-6 text-sm font-semibold text-gray-500 dark:text-gray-400">승인됨 · 차단됨</h3>
+      <ul className="divide-y divide-gray-100 dark:divide-white/5">
+        {others.map((a) =>
+          row(a, a.blocked ? (
+            <Button className="px-3 py-1.5" onClick={() => run(() => api.blockActor(a.device_id, false))}>
+              차단 해제
+            </Button>
+          ) : (
+            <Button variant="danger" className="px-3 py-1.5"
+              onClick={() => run(() => api.blockActor(a.device_id, true))}>차단</Button>
+          )),
+        )}
+      </ul>
+
+      <div className="mt-6 flex justify-end">
+        <Button onClick={onClose}>닫기</Button>
+      </div>
+    </Modal>
+  )
+}

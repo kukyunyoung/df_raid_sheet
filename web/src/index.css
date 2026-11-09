@@ -1,0 +1,17 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Pretendard Variable', Pretendard, system-ui, -apple-system, sans-serif;
+  --animate-toast: toast 5s ease forwards;
+
+  /* 떠올라서 머물다가 사라지는 알림 (5초) */
+  @keyframes toast {
+    0% { opacity: 0; transform: translateY(12px); }
+    6%, 88% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-8px); }
+  }
+}
+
+body {
+  @apply bg-gray-50 text-gray-950 antialiased dark:bg-gray-950 dark:text-white;
+}

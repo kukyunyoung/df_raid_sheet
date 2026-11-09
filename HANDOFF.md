@@ -230,6 +230,8 @@ TARGETS_FILE=t.json python run_update.py
 - 블록 클릭 → **"업둥" 체크** → 닉네임 오른쪽에 🌱 표시
 - 캐릭터 등록·삭제·업둥 체크는 **누구나 가능**, 모든 작업은 로그로 남김
 - **로그인 없이 작업자 식별**: 첫 방문 시 이름 입력 → 브라우저 localStorage에 `device_id`(UUID) + 이름 저장 → 쓰기 요청마다 헤더(`X-Device-Id`, `X-Actor-Name`)로 전송 → IP와 함께 로그 기록 (자기신고 방식이라 위조 가능하나 지인 규모에선 충분, 악용 시 device 차단)
+  - **이름 고정 + 관리자 승인제** (2026-11-09, `migrations/0003_actor_approval.sql`): 이름은 처음 등록값으로 고정(서버가 헤더 이름 무시). 신규 기기는 `actors.approved=0` → 쓰기 403 "승인 대기". 관리자가 하단 "관리자" → 작업자 관리에서 승인/거절(차단). 관리자 비밀번호로 요청한 기기는 자동 승인. 캐시 삭제 시 새 기기로 취급되어 다시 승인 필요
+  - API: `GET /api/actors/me`, `POST /api/actors/register {name}`, (관리자) `GET /api/actors`, `POST /api/actors/:deviceId/approve`, `POST /api/actors/:deviceId/block {blocked}`
 - **업둥은 모험단당 개수 제한**, 제한값은 관리자가 결정 (기본값 + 모험단별 예외)
 - **관리자 전용 데이터는 별도 테이블로 분리** (지금은 미사용, 확장용)
 
@@ -367,7 +369,11 @@ CREATE TABLE audit_log (
 ```
 - 모험단명은 공홈 응답에 없음 → 등록 시 입력. 필요 시 네오플 Open API(`adventureName`)로 검증
 - 관리자 인증: 초기엔 Worker Secret `ADMIN_PASSWORD`, 필요해지면 `admins` 테이블 추가
-- 향후 확장: 레이드 배정(`raids`, `raid_slots`) 테이블 추가
+- 공대표 (`migrations/0002_raids.sql`, 2026-11-09 추가)
+  - `raids(id, name UNIQUE, rounds)`: 공대표(예: 미카엘라 노말)와 기수 수. **생성·기수 추가는 관리자만**
+  - `raid_slots(raid_id, round, party, slot, character_id)`: party = red|yellow|green, slot 0~2 딜러 / 3 버퍼. 행 없음 = 빈 자리. **칸 편집은 누구나** (audit_log 기록)
+  - 캐릭터 삭제 시 해당 칸도 비움
+  - 중복체크(한 기수에 같은 모험단 2명 이상 금지)와 파티 화력((딜러 합/10만)×(버프력/10만))은 프론트에서 계산
 
 ### 6.2 Worker API (제안)
 | 메서드 | 경로 | 인증 | 설명 |
@@ -384,6 +390,12 @@ CREATE TABLE audit_log (
 | GET | `/api/meta` | 없음 | 서버 목록, 태그 정의·제한, 마지막 성공 갱신 시각 |
 | POST | `/api/crawler/start` | `Bearer CRAWLER_TOKEN` | body `{run_id?}` 또는 `{adventure?}` → `{run_id, targets:[{server,name}]}`. run_id 없으면 정기 실행으로 crawl_runs 생성 |
 | POST | `/api/crawler/results` | `Bearer CRAWLER_TOKEN` | `{run_id, results: CharScore[]}` 반영(json_each로 쿼리 4개), 실패 시 `{run_id, error}` |
+| GET | `/api/raids` | 없음 | 공대표 목록 |
+| POST | `/api/raids` | 관리자(`X-Admin-Password`) | 공대표 생성 `{name}` |
+| POST | `/api/raids/:id/rounds` | 관리자 | 기수 1개 추가 |
+| GET | `/api/raids/:id/slots` | 없음 | 칸 목록 `[{round,party,slot,character_id}]` |
+| PUT | `/api/raids/:id/slots` | 작업자 헤더 | 칸 채우기/바꾸기 `{round,party,slot,character_id}` |
+| DELETE | `/api/raids/:id/slots?round&party&slot` | 작업자 헤더 | 칸 비우기 |
 | POST | `/api/agent` | 공용 비밀번호 + 일일 한도 | Claude 에이전트 (추후) |
 
 - CORS: Pages 도메인만 허용
@@ -422,7 +434,7 @@ CREATE TABLE audit_log (
 |---|---|---|
 | M0 준비 | Node/wrangler, gcloud 설치·로그인, 로컬 크롤러 테스트 | 3.6 값 재현 |
 | M1 Worker + D1 ✅ | 스키마, 캐릭터 CRUD, 크롤러 API(`CRAWLER_TOKEN`) — `worker/` | 로컬 스모크 테스트 통과 (실제 크롤러 연동 테스트는 M0 후) |
-| M2 프론트 | 목록/정렬/등록·삭제, 상태 표시, 모바일, Pages 배포 | `*.pages.dev`에서 실데이터 확인 |
+| M2 프론트 (로컬 완료, 배포 남음) | 목록/정렬/등록·삭제, 상태 표시, 모바일, Pages 배포 — `web/` (Vite + React + Tailwind v4, Bento 스타일, 다크모드) | `*.pages.dev`에서 실데이터 확인 |
 | M3 크롤러 배포 | `ADVENTURE` env 지원, Cloud Run Job, Scheduler(6시간), 예산 알림 | 정기 자동 갱신 |
 | M4 수동 갱신 | `/api/refresh`(전체/모험단, IP 30분 쿨타임), Worker→Job 트리거, 버튼 | 버튼으로 갱신 반영 |
 | M5 이관·운영 | 구글 시트 → D1 이관, 실패 알림 | 지인 공유 |
