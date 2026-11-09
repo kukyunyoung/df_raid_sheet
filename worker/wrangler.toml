@@ -1,0 +1,16 @@
+name = "dfloader-api"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+# 프론트(Pages) 도메인. 콤마로 여러 개
+ALLOWED_ORIGINS = "http://localhost:5173"
+
+# 비밀값은 `wrangler secret put CRAWLER_TOKEN` / `ADMIN_PASSWORD` (로컬은 .dev.vars)
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dfloader"
+# `wrangler d1 create dfloader` 실행 후 출력되는 id로 교체
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
