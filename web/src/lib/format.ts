@@ -50,6 +50,12 @@ export function describeLog(log: LogEntry, tags: Tag[]): string {
       return `작업자 ${d.actor} 차단`
     case 'actor.unblock':
       return `작업자 ${d.actor} 차단 해제`
+    case 'actor.rename':
+      return `작업자 이름 변경 ${d.from} → ${d.to}`
+    case 'actor.delete':
+      return `작업자 ${d.actor} 삭제`
+    case 'refresh.request':
+      return d.scope === 'adventure' ? `${d.adventure} 모험단 갱신 요청` : '전체 갱신 요청'
     case 'raid.create':
       return `공대표 ${d.raid} 추가`
     case 'raid.round_add':

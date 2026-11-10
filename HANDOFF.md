@@ -211,11 +211,19 @@ if (n.obfuscateKey) {
 - Cloud Run Job 이미지용
 
 ### 5.4 로컬 테스트
-```bash
-pip install playwright && playwright install chromium
-echo '[{"server":"바칼","name":"븜바"},{"server":"바칼","name":"구구녕"}]' > t.json
-TARGETS_FILE=t.json python run_update.py
+```powershell
+# Python 3.12 가상환경 (3.14는 playwright 1.48의 greenlet 빌드 실패)
+uv venv --python 3.12 .venv
+uv pip install --python .venv\Scripts\python.exe playwright==1.48.0
+.venv\Scripts\python.exe -m playwright install chromium
+
+# 공홈만 테스트 (stdout 출력)
+$env:TARGETS_FILE="t.json"; .venv\Scripts\python.exe run_update.py
+# Worker 연동 테스트 (worker에서 npm run dev 실행 중일 때)
+$env:WORKER_URL="http://127.0.0.1:8787"; $env:CRAWLER_TOKEN="local-crawler-token"; $env:ADVENTURE="구구녕"
+.venv\Scripts\python.exe run_update.py
 ```
+- 2026-11-10 확인: 공홈 값 3.6과 일치, Worker 경유 D1 저장·crawl_runs 기록 정상
 기대값: 3.6 표와 일치 (단, 실제 게임 내 장비 변경 시 달라질 수 있음)
 
 ---
@@ -374,6 +382,7 @@ CREATE TABLE audit_log (
   - `raid_slots(raid_id, round, party, slot, character_id)`: party = red|yellow|green, slot 0~2 딜러 / 3 버퍼. 행 없음 = 빈 자리. **칸 편집은 누구나** (audit_log 기록)
   - 캐릭터 삭제 시 해당 칸도 비움
   - 중복체크(한 기수에 같은 모험단 2명 이상 금지)와 파티 화력((딜러 합/10만)×(버프력/10만))은 프론트에서 계산
+- **IP 수집 중단** (`migrations/0004_drop_ip.sql`, 2026-11-10): `crawl_runs.requester_ip`, `actors.last_ip`, `audit_log.actor_ip` 컬럼과 기존 값 삭제. 위 스키마의 IP 컬럼은 더 이상 없음
 
 ### 6.2 Worker API (제안)
 | 메서드 | 경로 | 인증 | 설명 |
@@ -384,9 +393,12 @@ CREATE TABLE audit_log (
 | PUT/DELETE | `/api/characters/:id/tags/:key` | 작업자 헤더 필수 (`admin_only` 태그는 관리자) | 업둥 등 태그 체크/해제. 모험단당 제한 초과 시 409 |
 | GET | `/api/logs` | 없음 | 작업 로그 조회 (누가 언제 무엇을) |
 
-- 쓰기 요청 공통: `X-Device-Id`, `X-Actor-Name` 헤더 필수, `actors.blocked=1`이면 403, 모두 `audit_log` 기록
+- 쓰기 요청 공통: `X-Device-Id`, `X-Actor-Name` 헤더 필수, 모두 `audit_log` 기록
+- 차단: 프론트는 모든 요청에 `X-Device-Id`를 보내고, `actors.blocked=1`인 기기는 **조회까지** 403 `{blocked:true}` → 차단 화면 (크롤러 경로 제외, 관리자 비밀번호 요청 예외). 브라우저 데이터를 지우면 새 기기로 취급되지만 다시 승인을 받아야 쓰기 가능
+- 작업자 관리(관리자): `GET /api/actors`, `POST /:deviceId/approve`, `POST /:deviceId/block {blocked}`, `PUT /:deviceId {name}` 이름 변경, `DELETE /:deviceId` 삭제(그 기기는 이름 입력·승인부터 다시)
+- `GET /api/version`: 변경 감지 값. 프론트가 10초(갱신 중 4초)마다 호출해 바뀌면 다시 불러옴 (탭이 안 보이면 중단)
 - 업둥 제한 검사는 `INSERT ... SELECT ... WHERE (현재 개수) < 제한` 한 문장으로 처리해 동시 요청에도 초과 방지
-| POST | `/api/refresh` | 없음 + IP당 30분 쿨타임 | 수동 갱신 → Cloud Run Job 실행. body: `{"scope":"all"}` 또는 `{"scope":"adventure","adventure":"구구녕"}` |
+| POST | `/api/refresh` | **관리자** (2026-11-10 변경: IP 쿨타임 대신 관리자 전용) | 수동 갱신 → Cloud Run Job 실행. body: `{"scope":"all"}` 또는 `{"scope":"adventure","adventure":"구구녕"}`. 진행 중(시작 30분 이내 running)이면 409. `/api/meta`의 `running`으로 진행 여부 표시 |
 | GET | `/api/meta` | 없음 | 서버 목록, 태그 정의·제한, 마지막 성공 갱신 시각 |
 | POST | `/api/crawler/start` | `Bearer CRAWLER_TOKEN` | body `{run_id?}` 또는 `{adventure?}` → `{run_id, targets:[{server,name}]}`. run_id 없으면 정기 실행으로 crawl_runs 생성 |
 | POST | `/api/crawler/results` | `Bearer CRAWLER_TOKEN` | `{run_id, results: CharScore[]}` 반영(json_each로 쿼리 4개), 실패 시 `{run_id, error}` |
@@ -432,13 +444,39 @@ CREATE TABLE audit_log (
 ## 6.7 마일스톤 (2026-11-09 확정)
 | 단계 | 내용 | 완료 기준 |
 |---|---|---|
-| M0 준비 | Node/wrangler, gcloud 설치·로그인, 로컬 크롤러 테스트 | 3.6 값 재현 |
+| M0 준비 (크롤러 ✅, 로그인 남음) | Node/wrangler, gcloud 설치·로그인, 로컬 크롤러 테스트 | 3.6 값 재현 — 2026-11-10 완료 |
 | M1 Worker + D1 ✅ | 스키마, 캐릭터 CRUD, 크롤러 API(`CRAWLER_TOKEN`) — `worker/` | 로컬 스모크 테스트 통과 (실제 크롤러 연동 테스트는 M0 후) |
-| M2 프론트 (로컬 완료, 배포 남음) | 목록/정렬/등록·삭제, 상태 표시, 모바일, Pages 배포 — `web/` (Vite + React + Tailwind v4, Bento 스타일, 다크모드) | `*.pages.dev`에서 실데이터 확인 |
-| M3 크롤러 배포 | `ADVENTURE` env 지원, Cloud Run Job, Scheduler(6시간), 예산 알림 | 정기 자동 갱신 |
-| M4 수동 갱신 | `/api/refresh`(전체/모험단, IP 30분 쿨타임), Worker→Job 트리거, 버튼 | 버튼으로 갱신 반영 |
+| M2 프론트 (Worker·D1 배포 완료, Pages 남음) | 목록/정렬/등록·삭제, 상태 표시, 모바일, Pages 배포 — `web/` (Vite + React + Tailwind v4, Bento 스타일, 다크모드) | `*.pages.dev`에서 실데이터 확인 |
+| M3 크롤러 배포 ✅ | `ADVENTURE` env 지원, Cloud Run Job, Scheduler(6시간), 예산 알림 (6.8 참고) | 2026-11-10 Job 직접 실행·Scheduler 강제 실행 모두 성공, 실서버 D1 반영 확인 |
+| M4 수동 갱신 (코드 완료, GCP 연결 남음) | `/api/refresh`(전체/모험단, 관리자 전용), Worker→Job 트리거(`worker/src/gcp.ts`), 캐릭터 목록 탭 "갱신" 버튼. GCP 미설정 시 503 "갱신 서버(GCP)가 아직 설정되지 않았습니다". 연결하려면 Worker에 `GCP_PROJECT`, `GCP_REGION`, `GCP_JOB` vars와 `GCP_SA_KEY` secret(서비스 계정 키 JSON, Cloud Run Invoker/Developer 권한) 설정 | 버튼으로 갱신 반영 |
 | M5 이관·운영 | 구글 시트 → D1 이관, 실패 알림 | 지인 공유 |
 | M6 추후 | Claude 에이전트, 상수 자동 추출, 추이 그래프, 레이드 배정 | — |
+
+---
+
+## 6.8 배포 현황 (2026-11-10)
+- D1 `dfloader` (APAC, id `be70c07b-a7b7-4785-9e81-b5cdb10b9d6b`), 마이그레이션 0001~0003 적용
+- Worker `dfloader-api` → https://dfloader-api.dfloader-api.workers.dev (workers.dev 서브도메인은 대시보드에서 변경 가능)
+- Secrets: `CRAWLER_TOKEN`, `ADMIN_PASSWORD` 설정됨 (값은 문서에 기록하지 않음, 변경: `npx wrangler secret put <이름>`)
+  - 주의: PowerShell에서 `"값" | wrangler secret put`으로 넣으면 끝에 `\r`이 붙어 비교 실패함 → 대화형 입력이나 `wrangler secret bulk <json>` 사용
+- 주의: 로컬 D1 파일은 `database_id` 기준으로 저장됨. id를 바꾸면 `wrangler dev`가 빈 로컬 DB를 봄 (2026-11-10 id 변경 시 기존 로컬 파일을 새 id 이름으로 복사해 복구)
+- `ALLOWED_ORIGINS`: `https://df-raid-sheet.pages.dev` + localhost 전 포트
+- GCP (2026-11-10): 프로젝트 `df-sheet-514301` (리전 asia-northeast3). 기존 `natural-treat-384410`은 API 키 유출 의심으로 Google이 정지 → 사용 안 함
+  - 이미지: `asia-northeast3-docker.pkg.dev/df-sheet-514301/dfloader/crawler:latest` (Cloud Build, `.gcloudignore`로 3개 파일만 업로드)
+  - Cloud Run Job `dfloader-crawler` (2GiB, timeout 30m, retries 0), SA `crawler-job`, env `WORKER_URL`, secret `CRAWLER_TOKEN`←Secret Manager `crawler-token`
+  - Scheduler `dfloader-crawler-6h`: `0 2,8,14,20 * * *` Asia/Seoul, SA `scheduler-invoker`(Job에만 run.invoker)
+  - 수동 갱신: SA `worker-trigger`(Job에만 run.jobsExecutorWithOverrides) 키 → Worker secret `GCP_SA_KEY`, vars `GCP_PROJECT/REGION/JOB`
+  - Cloud Build 기본 SA(`…-compute@developer`)에 storage.objectViewer, artifactregistry.writer, logging.logWriter 부여 (새 프로젝트 기본 권한 없음)
+  - 예산 알림: 월 5,000원 (50/90/100%)
+  - 크롤러 이미지 재배포: `gcloud builds submit --tag <이미지> --region=asia-northeast3 .` 후 `gcloud run jobs update dfloader-crawler --image=<이미지> --region=asia-northeast3`
+  - 주의: Python 기본 User-Agent(`Python-urllib`)는 Cloudflare가 1010으로 차단 → `run_update.py`가 `dfloader-crawler/1.0` 사용
+- Pages `df-raid-sheet`: 최신 wrangler는 Pages를 Workers로 자동 위임하며 빌드 실패 → 기존 Pages 방식(`--force`)으로 배포
+  ```powershell
+  cd web
+  $env:VITE_API_URL="https://dfloader-api.dfloader-api.workers.dev"; npm run build
+  npx wrangler pages project create df-raid-sheet --production-branch main --force   # 최초 1회
+  npx wrangler pages deploy dist --project-name df-raid-sheet --branch main --commit-dirty=true --force
+  ```
 
 ---
 

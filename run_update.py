@@ -34,7 +34,9 @@ def _request(method: str, path: str, body=None):
         WORKER_URL + path,
         method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"},
+        # 기본 User-Agent(Python-urllib)는 Cloudflare가 봇으로 차단(error 1010)
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json",
+                 "User-Agent": "dfloader-crawler/1.0"},
     )
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read() or b"null")

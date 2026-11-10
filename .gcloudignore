@@ -1,0 +1,5 @@
+# Cloud Build 업로드 대상: 크롤러 이미지에 필요한 파일만
+*
+!Dockerfile
+!dfscore.py
+!run_update.py

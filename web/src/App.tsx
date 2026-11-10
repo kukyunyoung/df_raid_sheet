@@ -17,6 +17,7 @@ import {
 } from "./lib/raid";
 import { Button, Card, Eyebrow, Modal, cx, inputClass } from "./components/ui";
 import { AdminPanel } from "./components/AdminPanel";
+import { RefreshDialog } from "./components/RefreshDialog";
 import {
   getActorName,
   getAdminPassword,
@@ -31,9 +32,11 @@ import {
   type Meta,
   type Raid,
   type RaidSlot,
+  type RefreshScope,
   type SlotPos,
   ApiError,
   api,
+  onBlocked,
 } from "./lib/api";
 import { fmtDateTime, timeAgo } from "./lib/format";
 
@@ -85,6 +88,7 @@ export default function App() {
   const [actor, setActor] = useState(getActorName());
   const [nameOpen, setNameOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [refreshOpen, setRefreshOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [allLogs, setAllLogs] = useState<LogEntry[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -94,7 +98,7 @@ export default function App() {
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>("all");
   const [sort, setSort] = useState<SortKey>("score");
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (silent = false) => {
     try {
       const [m, c, l, r, my] = await Promise.all([
         api.meta(),
@@ -112,14 +116,15 @@ export default function App() {
       if (my.registered && my.name) {
         setActorName(my.name);
         setActor(my.name);
-      } else {
+      } else if (!silent) {
         setNameOpen(true);
       }
       if (getAdminPassword())
         api.actors().then(setActorList).catch(() => setActorList([]));
       setLoadError("");
     } catch (e) {
-      setLoadError(e instanceof ApiError ? e.message : "불러오지 못했습니다");
+      if (!silent)
+        setLoadError(e instanceof ApiError ? e.message : "불러오지 못했습니다");
     }
   }, []);
 
@@ -163,13 +168,79 @@ export default function App() {
   );
   const parties = table[roundNow - 1] ?? [];
 
-  useEffect(() => {
-    if (logsOpen)
+  const loadAllLogs = useCallback(
+    () =>
       api
         .logs(100)
         .then(setAllLogs)
-        .catch(() => setAllLogs([]));
-  }, [logsOpen]);
+        .catch(() => setAllLogs([])),
+    [],
+  );
+  useEffect(() => {
+    if (logsOpen) loadAllLogs();
+  }, [logsOpen, loadAllLogs]);
+
+  // 실시간 반영: 화면이 보이는 동안 변경 감지 값을 주기적으로 확인하고,
+  // 바뀌었을 때만 전체를 다시 불러옴 (다른 사람의 편집, 이름 신청, 갱신 완료)
+  // 차단된 기기: 서버가 모든 조회를 거부 → 차단 화면만 표시
+  const [blocked, setBlocked] = useState(false);
+  const blockedRef = useRef(false);
+  useEffect(() => {
+    onBlocked(() => {
+      blockedRef.current = true;
+      setBlocked(true);
+    });
+    return () => onBlocked(null);
+  }, []);
+
+  const logsOpenRef = useRef(logsOpen);
+  logsOpenRef.current = logsOpen;
+  useEffect(() => {
+    let lastV: string | null = null;
+    let wasRunning = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+
+    const tick = async () => {
+      clearTimeout(timer);
+      let running = wasRunning;
+      if (document.visibilityState === "visible") {
+        try {
+          const ver = await api.version();
+          running = ver.running;
+          // 차단이 풀렸으면 다시 불러오기
+          if (blockedRef.current) {
+            blockedRef.current = false;
+            setBlocked(false);
+            lastV = null;
+            await Promise.all([reload(), loadSlots()]);
+          }
+          if (lastV !== null && ver.v !== lastV) {
+            await Promise.all([reload(true), loadSlots()]);
+            if (logsOpenRef.current) loadAllLogs();
+            if (wasRunning && !running) showToast("갱신이 끝났습니다", "success");
+          }
+          lastV = ver.v;
+          wasRunning = running;
+        } catch {
+          // 일시적인 연결 오류는 다음 확인에서 다시 시도
+        }
+      }
+      // 갱신 중에는 더 자주 확인
+      if (!stopped) timer = setTimeout(tick, running ? 4000 : 10000);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+
+    tick();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [reload, loadSlots, loadAllLogs]);
 
   /** 쓰기 작업 공통: 이름 확인 → 실행 → 새로고침. 성공 여부 반환 */
   const run = useCallback(
@@ -233,6 +304,36 @@ export default function App() {
     }
   };
 
+  /** 수동 갱신 요청 (관리자) */
+  const requestRefresh = async (scope: RefreshScope, password: string) => {
+    if (!getActorName()) {
+      setNameOpen(true);
+      return false;
+    }
+    if (password) setAdminPassword(password);
+    try {
+      await api.refresh(scope);
+      showToast("갱신을 시작했습니다. 몇 분 뒤 반영됩니다", "success");
+      await reload();
+      return true;
+    } catch (e) {
+      // 새로 입력한 비밀번호는 확인에 성공했을 때만 기억
+      const wrongPw =
+        e instanceof ApiError &&
+        e.status === 403 &&
+        e.message.includes("관리자 비밀번호");
+      if (password || wrongPw) setAdminPassword("");
+      showToast(
+        wrongPw
+          ? "관리자 비밀번호가 맞지 않습니다"
+          : e instanceof ApiError
+            ? e.message
+            : "요청에 실패했습니다",
+      );
+      return false;
+    }
+  };
+
   /** 모든 기수를 돌며 한 공대에 같은 모험단 캐릭이 2명 이상인지 확인 */
   const checkDuplicates = () => {
     const issues = findDuplicates(table);
@@ -267,6 +368,18 @@ export default function App() {
   const dealers = chars.filter((c) => c.score_type === "equip").length;
   const buffers = chars.filter((c) => c.score_type === "buff").length;
   const selected = chars.find((c) => c.id === selectedId) ?? null;
+
+  if (blocked)
+    return (
+      <div className="flex min-h-dvh items-center justify-center px-4">
+        <div className="text-center">
+          <p className="text-lg font-semibold">접근이 차단되었습니다</p>
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+            관리자에게 문의해 주세요.
+          </p>
+        </div>
+      </div>
+    );
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-12">
@@ -311,13 +424,6 @@ export default function App() {
               이름 설정
             </button>
           )}
-          <Button
-            variant="primary"
-            onClick={() => setAddOpen(true)}
-            disabled={!meta}
-          >
-            캐릭터 등록
-          </Button>
         </div>
       </header>
 
@@ -346,7 +452,7 @@ export default function App() {
       {loadError && (
         <Card className="mt-6 p-4 text-sm text-red-600 dark:text-red-400">
           {loadError}{" "}
-          <button className="ml-2 font-semibold underline" onClick={reload}>
+          <button className="ml-2 font-semibold underline" onClick={() => reload()}>
             다시 시도
           </button>
         </Card>
@@ -465,6 +571,14 @@ export default function App() {
           }
           onSubmit={submitAdmin}
           onClose={() => setAdminAction(null)}
+        />
+      )}
+      {refreshOpen && (
+        <RefreshDialog
+          adventures={adventures}
+          lastSuccess={meta?.last_success?.finished_at ?? null}
+          onSubmit={requestRefresh}
+          onClose={() => setRefreshOpen(false)}
         />
       )}
       {adminOpen && (
@@ -611,6 +725,20 @@ export default function App() {
                 </button>
               ))}
             </div>
+            <Button
+              variant="primary"
+              onClick={() => setAddOpen(true)}
+              disabled={!meta}
+            >
+              캐릭터 등록
+            </Button>
+            <Button
+              onClick={() => setRefreshOpen(true)}
+              disabled={!meta || !!meta.running}
+              title="공식 홈페이지에서 점수 다시 가져오기 (관리자)"
+            >
+              {meta?.running ? "갱신 중…" : "갱신"}
+            </Button>
             <select
               className={cx(inputClass, "w-auto sm:ml-auto")}
               value={sort}

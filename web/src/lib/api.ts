@@ -33,7 +33,11 @@ export type Meta = {
   tags: Tag[]
   tag_limits: { adventure: string; tag: string; max_count: number }[]
   last_success: { finished_at: string; scope: string } | null
+  /** 진행 중인 갱신 (시작 30분 이내) */
+  running: { started_at: string; scope: string } | null
 }
+
+export type RefreshScope = { scope: 'all' } | { scope: 'adventure'; adventure: string }
 
 export type LogEntry = {
   id: number
@@ -53,7 +57,6 @@ export type ActorInfo = {
   name: string
   approved: number
   blocked: number
-  last_ip: string | null
   first_seen: string
   last_seen: string | null
   /** 같은 이름을 쓰는 다른 기기 수 */
@@ -77,10 +80,16 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown, write = false): Promise<T> {
-  const headers: Record<string, string> = {}
+/** 차단된 기기로 판정되면 호출 (App이 차단 화면으로 전환) */
+let blockedHandler: (() => void) | null = null
+export function onBlocked(fn: (() => void) | null) {
+  blockedHandler = fn
+}
+
+// 모든 요청에 기기 id를 보냄 (차단된 기기는 조회도 불가)
+async function request<T>(method: string, path: string, body?: unknown, _write = false): Promise<T> {
+  const headers: Record<string, string> = actorHeaders()
   if (body !== undefined) headers['Content-Type'] = 'application/json'
-  if (write) Object.assign(headers, actorHeaders())
 
   let res: Response
   try {
@@ -91,12 +100,15 @@ async function request<T>(method: string, path: string, body?: unknown, write = 
     throw new ApiError(0, '서버에 연결할 수 없습니다')
   }
   const data = await res.json().catch(() => null)
+  if (res.status === 403 && data?.blocked) blockedHandler?.()
   if (!res.ok) throw new ApiError(res.status, data?.error ?? `요청 실패 (${res.status})`)
   return data as T
 }
 
 export const api = {
   meta: () => request<Meta>('GET', '/api/meta'),
+  /** 변경 감지용 (값이 바뀌면 다시 불러오기) */
+  version: () => request<{ v: string; running: boolean }>('GET', '/api/version'),
   characters: () => request<Character[]>('GET', '/api/characters'),
   logs: (limit = 20) => request<LogEntry[]>('GET', `/api/logs?limit=${limit}`),
   addCharacter: (b: { server: string; name: string; adventure: string }) =>
@@ -112,6 +124,11 @@ export const api = {
     request('POST', `/api/actors/${deviceId}/approve`, undefined, true),
   blockActor: (deviceId: string, blocked: boolean) =>
     request('POST', `/api/actors/${deviceId}/block`, { blocked }, true),
+  renameActor: (deviceId: string, name: string) =>
+    request('PUT', `/api/actors/${deviceId}`, { name }, true),
+  deleteActor: (deviceId: string) => request('DELETE', `/api/actors/${deviceId}`, undefined, true),
+
+  refresh: (body: RefreshScope) => request<{ run_id: number }>('POST', '/api/refresh', body, true),
 
   raids: () => request<Raid[]>('GET', '/api/raids'),
   createRaid: (name: string) => request<Raid>('POST', '/api/raids', { name }, true),

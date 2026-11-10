@@ -3,14 +3,17 @@ main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
 [vars]
-# 프론트(Pages) 도메인. 콤마로 여러 개, 포트 자리에 *는 모든 포트 (배포 시 Pages 도메인으로 교체)
-ALLOWED_ORIGINS = "http://localhost:*,http://127.0.0.1:*"
+# 프론트(Pages) 도메인 + 로컬 개발. 콤마로 여러 개, 포트 자리에 *는 모든 포트
+ALLOWED_ORIGINS = "https://df-raid-sheet.pages.dev,http://localhost:*,http://127.0.0.1:*"
+# 수동 갱신 버튼 → Cloud Run Job 실행 (키는 secret GCP_SA_KEY)
+GCP_PROJECT = "df-sheet-514301"
+GCP_REGION = "asia-northeast3"
+GCP_JOB = "dfloader-crawler"
 
 # 비밀값은 `wrangler secret put CRAWLER_TOKEN` / `ADMIN_PASSWORD` (로컬은 .dev.vars)
 
 [[d1_databases]]
 binding = "DB"
 database_name = "dfloader"
-# `wrangler d1 create dfloader` 실행 후 출력되는 id로 교체
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "be70c07b-a7b7-4785-9e81-b5cdb10b9d6b"
 migrations_dir = "migrations"
