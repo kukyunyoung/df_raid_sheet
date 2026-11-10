@@ -182,9 +182,8 @@ if (n.obfuscateKey) {
 - **수동 갱신: 2가지 옵션**
   - **전체 갱신**: 등록된 모든 캐릭터
   - **모험단 갱신**: 선택한 모험단(`characters.adventure`)의 캐릭터만
-- **IP당 30분 쿨타임** (두 옵션 공용 — 같은 IP는 둘 중 하나를 30분에 1회만 요청 가능)
-  - Worker에서 `CF-Connecting-IP` 헤더로 IP 식별, 마지막 요청 시각을 D1에 기록
-  - 이미 Job이 실행 중이면 새로 실행하지 않음 (여러 IP의 중복 실행 방지). 이 경우 쿨타임도 소모하지 않음
+- ~~IP당 30분 쿨타임~~ → **2026-11-10 변경: 관리자 비밀번호로만 요청 가능**, IP는 수집하지 않음
+  - 이미 Job이 실행 중이면 새로 실행하지 않음 (409)
 
 ---
 
@@ -237,7 +236,7 @@ $env:WORKER_URL="http://127.0.0.1:8787"; $env:CRAWLER_TOKEN="local-crawler-token
 - 캐릭터 블록 표시: **모험단 / 닉네임 + 태그 이모지 / 점수(장비점수 또는 버프력)**
 - 블록 클릭 → **"업둥" 체크** → 닉네임 오른쪽에 🌱 표시
 - 캐릭터 등록·삭제·업둥 체크는 **누구나 가능**, 모든 작업은 로그로 남김
-- **로그인 없이 작업자 식별**: 첫 방문 시 이름 입력 → 브라우저 localStorage에 `device_id`(UUID) + 이름 저장 → 쓰기 요청마다 헤더(`X-Device-Id`, `X-Actor-Name`)로 전송 → IP와 함께 로그 기록 (자기신고 방식이라 위조 가능하나 지인 규모에선 충분, 악용 시 device 차단)
+- **로그인 없이 작업자 식별**: 첫 방문 시 이름 입력 → 브라우저 localStorage에 `device_id`(UUID) + 이름 저장 → 쓰기 요청마다 헤더(`X-Device-Id`, `X-Actor-Name`)로 전송 → 로그 기록 (자기신고 방식이라 위조 가능하나 지인 규모에선 충분, 악용 시 device 차단). 새 이름은 관리자 승인 후 쓰기 가능, 이름은 관리자만 변경
   - **이름 고정 + 관리자 승인제** (2026-11-09, `migrations/0003_actor_approval.sql`): 이름은 처음 등록값으로 고정(서버가 헤더 이름 무시). 신규 기기는 `actors.approved=0` → 쓰기 403 "승인 대기". 관리자가 하단 "관리자" → 작업자 관리에서 승인/거절(차단). 관리자 비밀번호로 요청한 기기는 자동 승인. 캐시 삭제 시 새 기기로 취급되어 다시 승인 필요
   - API: `GET /api/actors/me`, `POST /api/actors/register {name}`, (관리자) `GET /api/actors`, `POST /api/actors/:deviceId/approve`, `POST /api/actors/:deviceId/block {blocked}`
 - **업둥은 모험단당 개수 제한**, 제한값은 관리자가 결정 (기본값 + 모험단별 예외)
@@ -411,15 +410,16 @@ CREATE TABLE audit_log (
 | POST | `/api/agent` | 공용 비밀번호 + 일일 한도 | Claude 에이전트 (추후) |
 
 - CORS: Pages 도메인만 허용
-- 수동 갱신: IP당 30분 쿨타임, Job 실행 중이면 중복 실행 안 함 (4.1 참고)
+- 수동 갱신: 관리자 전용, Job 실행 중이면 중복 실행 안 함 (4.1 참고)
 - Worker → Cloud Run Job 실행: GCP 서비스 계정으로 Cloud Run Admin API `jobs:run` 호출. `/api/refresh`가 crawl_runs 행(trigger_type='manual')을 먼저 만들고 override env `RUN_ID`로 전달 → `run_update.py`가 `/api/crawler/start {run_id}`로 대상 조회
 - 실행 중 판단: `crawl_runs.status='running'`이고 시작 30분 이내 (크롤러가 죽어 running으로 남은 행은 무시)
 
 ### 6.3 프론트 (React + Vite)
-- 모험단별 / 직업별 / 딜러·버퍼 분리 테이블, 점수 정렬
-- 마지막 갱신 시각 표시, 수동 갱신 버튼 2개 (전체 갱신 / 모험단 갱신), 쿨타임 남은 시간 표시
-- `not_found`/`error` 캐릭 표시 (닉변 감지용)
-- 모바일 대응
+- 탭: **레이드 파티**(기본, 공대표) / **캐릭터 목록**(딜러·버퍼 필터, 정렬, 캐릭터 등록·일괄 등록, 갱신 버튼)
+- 마지막 갱신 시각 표시, 수동 갱신은 관리자 비밀번호 필요 (전체 / 모험단)
+- `not_found`/`error` 캐릭 표시 (닉변 감지용), 모바일 대응, 다크모드
+- **실시간 반영** (2026-11-10): `/api/version`을 10초(갱신 중 4초)마다 확인, 바뀌면 다시 불러옴. 다른 사람의 편집·이름 신청·승인·갱신 완료가 새로고침 없이 반영되고, 갱신이 끝나면 "갱신이 끝났습니다" 알림. 탭이 안 보이면 확인 중단
+- 작업자 관리: 페이지 맨 아래 "관리자" → 승인/거절/차단/차단 해제/이름 수정/삭제. 차단된 기기는 "접근이 차단되었습니다" 화면만 보임
 - 환경변수: `VITE_API_URL`
 
 ### 6.4 GCP 설정
@@ -446,16 +446,16 @@ CREATE TABLE audit_log (
 |---|---|---|
 | M0 준비 (크롤러 ✅, 로그인 남음) | Node/wrangler, gcloud 설치·로그인, 로컬 크롤러 테스트 | 3.6 값 재현 — 2026-11-10 완료 |
 | M1 Worker + D1 ✅ | 스키마, 캐릭터 CRUD, 크롤러 API(`CRAWLER_TOKEN`) — `worker/` | 로컬 스모크 테스트 통과 (실제 크롤러 연동 테스트는 M0 후) |
-| M2 프론트 (Worker·D1 배포 완료, Pages 남음) | 목록/정렬/등록·삭제, 상태 표시, 모바일, Pages 배포 — `web/` (Vite + React + Tailwind v4, Bento 스타일, 다크모드) | `*.pages.dev`에서 실데이터 확인 |
+| M2 프론트 ✅ (2026-11-10 Pages 배포) | 목록/정렬/등록·삭제, 상태 표시, 모바일, Pages 배포 — `web/` (Vite + React + Tailwind v4, Bento 스타일, 다크모드) | `*.pages.dev`에서 실데이터 확인 |
 | M3 크롤러 배포 ✅ | `ADVENTURE` env 지원, Cloud Run Job, Scheduler(6시간), 예산 알림 (6.8 참고) | 2026-11-10 Job 직접 실행·Scheduler 강제 실행 모두 성공, 실서버 D1 반영 확인 |
-| M4 수동 갱신 (코드 완료, GCP 연결 남음) | `/api/refresh`(전체/모험단, 관리자 전용), Worker→Job 트리거(`worker/src/gcp.ts`), 캐릭터 목록 탭 "갱신" 버튼. GCP 미설정 시 503 "갱신 서버(GCP)가 아직 설정되지 않았습니다". 연결하려면 Worker에 `GCP_PROJECT`, `GCP_REGION`, `GCP_JOB` vars와 `GCP_SA_KEY` secret(서비스 계정 키 JSON, Cloud Run Invoker/Developer 권한) 설정 | 버튼으로 갱신 반영 |
+| M4 수동 갱신 (배포·GCP 연결 완료, 실서버 버튼 테스트 남음) | `/api/refresh`(전체/모험단, 관리자 전용), Worker→Job 트리거(`worker/src/gcp.ts`), 캐릭터 목록 탭 "갱신" 버튼. GCP 미설정 시 503 "갱신 서버(GCP)가 아직 설정되지 않았습니다". 연결하려면 Worker에 `GCP_PROJECT`, `GCP_REGION`, `GCP_JOB` vars와 `GCP_SA_KEY` secret(서비스 계정 키 JSON, Cloud Run Invoker/Developer 권한) 설정 | 버튼으로 갱신 반영 |
 | M5 이관·운영 | 구글 시트 → D1 이관, 실패 알림 | 지인 공유 |
 | M6 추후 | Claude 에이전트, 상수 자동 추출, 추이 그래프, 레이드 배정 | — |
 
 ---
 
 ## 6.8 배포 현황 (2026-11-10)
-- D1 `dfloader` (APAC, id `be70c07b-a7b7-4785-9e81-b5cdb10b9d6b`), 마이그레이션 0001~0003 적용
+- D1 `dfloader` (APAC, id `be70c07b-a7b7-4785-9e81-b5cdb10b9d6b`), 마이그레이션 0001~0003 적용 (0004_drop_ip는 `deploy.ps1` 실행 시 적용)
 - Worker `dfloader-api` → https://dfloader-api.dfloader-api.workers.dev (workers.dev 서브도메인은 대시보드에서 변경 가능)
 - Secrets: `CRAWLER_TOKEN`, `ADMIN_PASSWORD` 설정됨 (값은 문서에 기록하지 않음, 변경: `npx wrangler secret put <이름>`)
   - 주의: PowerShell에서 `"값" | wrangler secret put`으로 넣으면 끝에 `\r`이 붙어 비교 실패함 → 대화형 입력이나 `wrangler secret bulk <json>` 사용
@@ -470,13 +470,18 @@ CREATE TABLE audit_log (
   - 예산 알림: 월 5,000원 (50/90/100%)
   - 크롤러 이미지 재배포: `gcloud builds submit --tag <이미지> --region=asia-northeast3 .` 후 `gcloud run jobs update dfloader-crawler --image=<이미지> --region=asia-northeast3`
   - 주의: Python 기본 User-Agent(`Python-urllib`)는 Cloudflare가 1010으로 차단 → `run_update.py`가 `dfloader-crawler/1.0` 사용
-- Pages `df-raid-sheet`: 최신 wrangler는 Pages를 Workers로 자동 위임하며 빌드 실패 → 기존 Pages 방식(`--force`)으로 배포
+- Pages `df-raid-sheet` → https://df-raid-sheet.pages.dev (2026-11-10 배포). 프로젝트 생성 시 최신 wrangler가 Workers로 자동 위임하며 실패해서 `pages project create ... --force`로 만듦
+- **배포는 저장소 루트의 `deploy.ps1`** (Worker 배포 → 실서버 D1 마이그레이션 적용 → 웹 빌드 → Pages 배포)
   ```powershell
-  cd web
-  $env:VITE_API_URL="https://dfloader-api.dfloader-api.workers.dev"; npm run build
-  npx wrangler pages project create df-raid-sheet --production-branch main --force   # 최초 1회
-  npx wrangler pages deploy dist --project-name df-raid-sheet --branch main --commit-dirty=true --force
+  .\deploy.ps1          # 전부
+  .\deploy.ps1 worker   # Worker + 마이그레이션만
+  .\deploy.ps1 web      # 웹만
   ```
+  - Worker를 먼저 올리고 마이그레이션을 적용하므로, 마이그레이션은 **이전 코드가 안 쓰는 변경만**(새 코드가 옛 스키마에서도 동작하게) 작성
+  - 마이그레이션 적용 시 "Ok to proceed?" 확인에 `y`
+  - 파일은 UTF-8 **BOM 포함**으로 저장해야 Windows PowerShell 5.1에서 한글이 안 깨짐
+  - Claude Code는 실서버 배포가 자동 차단되므로 사용자가 직접 실행
+  - D1 오류 `code: 7403`(account not valid)이 나오면 로그인 만료일 가능성 → `npx wrangler whoami`로 확인하거나 `npx wrangler login` 후 재실행
 
 ---
 

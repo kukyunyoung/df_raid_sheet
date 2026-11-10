@@ -607,10 +607,18 @@ export default function App() {
                   <div className="mt-6 flex flex-wrap gap-2">
                     {adventures.map((a) => {
                       const active = adventure === a;
+                      const members = chars.filter((c) => c.adventure === a);
+                      const deal = members.filter(
+                        (c) => c.score_type === "equip",
+                      ).length;
+                      const buff = members.filter(
+                        (c) => c.score_type === "buff",
+                      ).length;
                       return (
                         <button
                           key={a}
                           onClick={() => setAdventure(active ? "" : a)}
+                          title={`딜러 ${deal} / 버퍼 ${buff}`}
                           className={cx(
                             "rounded-full px-3 py-1 text-sm ring-1 transition",
                             active
@@ -625,7 +633,7 @@ export default function App() {
                               active ? "text-indigo-200" : "text-gray-400",
                             )}
                           >
-                            {chars.filter((c) => c.adventure === a).length}
+                            {deal}/{buff}
                           </span>
                         </button>
                       );
